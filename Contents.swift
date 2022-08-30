@@ -1,79 +1,96 @@
-import Foundation
+import UIKit
 
-var stack = [Chip]()
-let condition = NSCondition()
-var available = false
-var interval = 2.0
-
-public struct Chip {
+//Working thread
+class Work: Thread {
+    private var stash: Stash
+    private var count: Int
     
-    public enum ChipType: UInt32 {
-        case small = 1
-        case medium
-        case big
+    init(stash: Stash, count: Int) {
+        self.stash = stash
+        self.count = count
     }
     
-    public let chipType: ChipType
+    override func main() {
+        working()
+        print("Работающий поток закончен")
+    }
     
-    public static func make() -> Chip {
-        guard let chipType = Chip.ChipType(rawValue: UInt32(arc4random_uniform(3) + 1)) else {
-            fatalError("Incorrect random value")
+    private func working() {
+        while count != 0 {
+            if stash.chipArray.isEmpty == false {
+                count += 1
+                stash.chipArray.last?.sodering()
+                print("Чип припаян.")
+                stash.chipArray.removeLast()
+                print("Чип удален из стека.")
+                print("Остаток: \(stash.getAllChips()).")
+            }
+        }
+    }
+}
+
+// Chip Generator thread
+class Generator: Thread {
+    private var stash: Stash
+    private var count: Int
+    private var interval: Double
+    
+    init(stash: Stash, count: Int, interval: Double) {
+        self.stash = stash
+        self.count = count
+        self.interval = interval
+    }
+    
+    override func main() {
+        for _ in 1...count {
+            let chip = createChip()
+            stash.pushChip(chip: chip)
+            Thread.sleep(forTimeInterval: interval)
+        }
+        cancel()
+        print("Генерирующий поток закончен")
+    }
+    
+    private func createChip() -> Chip {
+        let chip = Chip.make()
+        print("Чип типа \(chip.chipType) создан. Остаток: \(stash.getAllChips())")
+        return chip
+    }
+}
+
+//Stash class
+class Stash {
+    var chipArray: [Chip] = []
+    private var queue: DispatchQueue = DispatchQueue(label: "syncQueue", qos: .utility, attributes: .concurrent)
+    var count: Int { chipArray.count }
+    
+    func pushChip(chip: Chip) {
+        queue.async(flags: .barrier) { [unowned self] in
+            self.chipArray.append(chip)
+            print("Чип типа \(chip.chipType) на обработке. Остаток: \(getAllChips())")
+        }
+    }
+    
+    func popChip() -> Chip? {
+        var chip: Chip?
+        queue.sync { [unowned self] in
+            guard let poppedChip = self.chipArray.popLast() else { return }
+            chip = poppedChip
+            print("Чип типа \(poppedChip.chipType) подготовлен. Остаток: \(getAllChips())")
         }
         
-        return Chip(chipType: chipType)
+        return chip
     }
     
-    public func sodering() {
-        let soderingTime = chipType.rawValue
-        sleep(UInt32(soderingTime))
-    }
-}
-
-public class Generating: Thread {
-    
-    public override func main() {
-        print("Generation thread begin work")
-
-        for _ in 1...10 {
-            condition.lock()
-            stack.append(Chip.make())
-            print("I create \(stack.count) - count element in stack")
-            available = true
-            condition.signal()
-            condition.unlock()
-            Generating.sleep(forTimeInterval: interval)
-            
-            if Thread.current.isCancelled {
-                print("Generation thread stop")
-                return
-            }
-        }
-        
+    func getAllChips() -> [UInt32] {
+        chipArray.compactMap { $0.chipType.rawValue }
     }
 }
 
-public class Worker: Thread {
-    
-    public override func main() {
-        print("Worker thread begin work")
-        for _ in 1...10 {
-            while (!available) {
-                condition.wait()
-            }
-            stack.removeFirst().sodering()
-            print("Remove from the stack. \(stack.count) - count element in stack")
-            if stack.count < 1 {
-                available = false
-                print("Worker thread stop")
-            }
-        }
-    }
-    
-}
+let stash = Stash()
+let generator = Generator(stash: stash, count: 5, interval: 2.0)
+let work = Work(stash: stash, count: 5)
 
-var generate = Generating()
-var worker = Worker()
-
-generate.start()
-worker.start()
+generator.start()
+work.start()
 
